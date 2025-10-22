@@ -41,39 +41,32 @@ SELECT DISTINCT
 
 ## ***Lab 2***
 
-Сначала при помощи подзапроса `amount_for_aircrafts` посчитаем среднюю стоимость билета на каждый класс обслуживания для каждого самолета при помощи `AVG` для всех строк с одинаковыми `aircraft_code` и `fare_conditions`. Такое возможно если при помощи `JOIN` соединить таблицы `flights` и `ticket_flights` по общему столбцу `flight_id` и применить группировку `GROUP BY` по `aircraft_code` и `fare_conditions`.
+При помощи подзапроса `dist` считается дальность каждого полета, скорость каждого самолета берется за константу - **900** км/ч. `EXTRACT EPOCH` преобразует полную дату в секунды, которые далее преобразуются в часы и умножаются на скорость.
+Подзапрос при помощи группировки по `flight_id` и `fare_conditions` считает цену для каждого класса обслуживания для каждого рейса. 
+В основном запросе считаем средний коэффициент цены к дальности для пассажира и для авиакомпании. При помощи `JOIN`-ов присоединям подзапросы и таблицу с самолетами. Группируем все по модели и классу обсуживания.
 
-Для нахождения стоимости топлива на место за километр пути используем второй подзапрос `fuel_per_seat`
-
-Далее делаем основной запрос из `aircrafts_data` откуда берем модель самолета и его дальность полёта для подсчёта отношения денег за билет на километр. При помощи `JOIN` добываем среднюю стоимость каждого класса для каждого самолета и сортируем всё это по данному отношению в порядке возрастания. 
-
-Таким образом, самый выгодный вариант для пассажира - билет **эконом класса в Боинге 777-300**, так как для пассажира не имеет значения стоимость топлива, то ему нужно знать лишь отношение цены билета на километр пути
-
-А для авиакомпании имеет значение такой показатель, как (цена билета за километр - цена (топлива на километр / число пассажиров этого класса)). Возьмем среднее значение стоимости топлива на километр пути для этих самолетов равным **150**руб. Тогда получим, что самый выгодный полет для авиалиний будет **билет бизнес класса на Аэробусе А319-100**
-
+Для большей наглядности ограничиваем количество цифр после запятой при помощи приведения к типу `numeric`.
+ 
 
 ```sql
-WITH ticket_per_km AS (
-	SELECT aircraft_code, fare_conditions,
-		AVG(amount) as money_for_ticket 
-			FROM flights
-			JOIN ticket_flights ON flights.flight_id = ticket_flights.flight_id
-			GROUP BY aircraft_code, fare_conditions
-			ORDER BY aircraft_code
+WITH dist AS (
+    SELECT flight_id, aircraft_code, 
+        (EXTRACT (EPOCH FROM (actual_arrival - actual_departure)) / 3600) * 900 AS distance
+        FROM bookings.flights
 ),
-fuel_per_seat AS (
-	SELECT seats.aircraft_code, fare_conditions, 
-			(150 / (count(seats.seat_no))) as money_for_fuel
-		FROM aircrafts_data
-			JOIN seats ON aircrafts_data.aircraft_code = seats.aircraft_code	
-			GROUP BY seats.fare_conditions, seats.aircraft_code
+money_for_flight AS (
+    SELECT flight_id, fare_conditions, SUM(amount) as total_money
+        FROM bookings.ticket_flights
+        GROUP BY flight_id, fare_conditions
 )
-SELECT DISTINCT model, ticket_per_km.fare_conditions, 
-				(money_for_ticket / aircrafts_data.range)::numeric(14, 2) as ticket_per_km_amount,
-				(money_for_ticket / aircrafts_data.range - money_for_fuel)::numeric(14, 2) as money_for_airlines	
-	FROM aircrafts_data
-		JOIN ticket_per_km ON aircrafts_data.aircraft_code = ticket_per_km.aircraft_code
-		JOIN fuel_per_seat ON aircrafts_data.aircraft_code = fuel_per_seat.aircraft_code
-			AND ticket_per_km.fare_conditions = fuel_per_seat.fare_conditions
-		ORDER BY ticket_per_km_amount;
+SELECT model, ticket_flights.fare_conditions,
+    AVG(amount / distance)::numeric(7, 2) as passenger_cost,
+    AVG(total_money / distance)::numeric(7, 2) as airline_cost
+    FROM bookings.ticket_flights
+    JOIN dist ON ticket_flights.flight_id = dist.flight_id
+    JOIN aircrafts_data ON dist.aircraft_code = aircrafts_data.aircraft_code
+    JOIN money_for_flight ON ticket_flights.flight_id = money_for_flight.flight_id AND
+        ticket_flights.fare_conditions = money_for_flight.fare_conditions
+    GROUP BY model, ticket_flights.fare_conditions;
+
 ```
